@@ -263,54 +263,35 @@ with tab2:
                 st.rerun()
 
     st.markdown("---")
-    # ==================== 支援 TXT 及 CSV 檔案上傳 ====================
-    st.write("##### 📂 上傳/匯入歷史備份檔 (支援 bo_coins.txt / billing_history.txt / CSV)")
-    uploaded_file = st.file_uploader("選擇上傳手機裡的舊備份檔案:", type=["txt", "csv"])
+    # ==================== 全自動偵測檔案類型與匯入 ====================
+    st.write("##### 📂 上傳/匯入歷史備份檔 (全自動辨識)")
+    uploaded_file = st.file_uploader("選擇上傳手機裡的舊備份檔案 (TXT 或 CSV):", type=["txt", "csv"])
     
     if uploaded_file is not None:
         file_name = uploaded_file.name
-        content = uploaded_file.read().decode("utf-8", errors="ignore")
-        
-        # 情況 A：上傳的是 bo_coins.txt
-        if "bo_coins" in file_name or (content.strip().replace('.', '', 1).isdigit() and len(content.strip().splitlines()) == 1):
+        content = uploaded_file.read().decode("utf-8", errors="ignore").strip()
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+
+        is_coin_file = False
+        coin_val = 0.0
+
+        # 【自動檢測條件 1】：是否為波幣檔
+        if "bo_coins" in file_name or (len(lines) == 1 and lines[0].replace('.', '', 1).isdigit()):
             try:
-                coin_val = float(content.strip())
-                st.info(f"偵測到波幣檔案！數值為：**{coin_val}** 波幣")
-                if st.button("🪙 匯入並覆蓋波幣餘額", type="primary"):
-                    st.session_state.bo_coins = coin_val
-                    save_wallet(coin_val)
-                    st.success(f"已將波幣更新為 {coin_val}！")
-                    st.rerun()
+                coin_val = float(lines[0])
+                is_coin_file = True
             except Exception:
-                st.error("解析波幣檔案失敗，請確定內容為數字。")
+                is_coin_file = False
 
-        # 情況 B：上傳的是 TXT 格式紀錄檔
-        elif file_name.endswith(".txt"):
-            st.info("偵測到 TXT 文字紀錄檔！")
-            parsed_records = []
-            lines = content.splitlines()
-            for line in lines:
-                # 簡單解析格式： [時間] xx分鐘 | xx元
-                match = re.search(r'\[(.*?)\]\s*([\d.]+)\s*分鐘\s*\|\s*([\d.]+)\s*元(?:\|\s*(.*))?', line)
-                if match:
-                    t_str, m_str, c_str, n_str = match.groups()
-                    parsed_records.append({
-                        "time": t_str,
-                        "minutes": float(m_str),
-                        "cost": float(c_str),
-                        "note": n_str if n_str else "TXT匯入"
-                    })
-            if parsed_records:
-                st.write(f"成功解析出 **{len(parsed_records)}** 筆紀錄！")
-                if st.button("📥 確認匯入這些歷史紀錄", type="primary"):
-                    st.session_state.history.extend(parsed_records)
-                    save_history(st.session_state.history)
-                    st.success("紀錄匯入成功！")
-                    st.rerun()
-            else:
-                st.warning("檔案中找不到可對應的紀錄格式。")
-
-        # 情況 C：上傳的是 CSV 檔
+        if is_coin_file:
+            st.info(f"🪙 **自動偵測結果：波幣備份檔**！找到數值 **{coin_val}** 波幣")
+            if st.button("🪙 匯入並更新波幣餘額", type="primary"):
+                st.session_state.bo_coins = coin_val
+                save_wallet(coin_val)
+                st.success(f"已成功將波幣餘額更新為：{coin_val}！")
+                st.rerun()
+        
+        # 【自動檢測條件 2】：是否為 CSV 紀錄檔
         elif file_name.endswith(".csv"):
             try:
                 uploaded_file.seek(0)
@@ -332,6 +313,7 @@ with tab2:
                         })
                     except Exception:
                         pass
+                st.info(f"📊 **自動偵測結果：CSV 歷史紀錄檔**！共找到 {len(new_records)} 筆紀錄")
                 if st.button("📥 確認匯入此 CSV 紀錄", type="primary"):
                     st.session_state.history.extend(new_records)
                     save_history(st.session_state.history)
@@ -339,6 +321,47 @@ with tab2:
                     st.rerun()
             except Exception:
                 st.error("CSV 格式解析失敗！")
+
+        # 【自動檢測條件 3】：是否為 TXT 歷史紀錄檔 (billing_history.txt)
+        else:
+            st.info("📋 **自動偵測結果：TXT 歷史紀錄檔**！正在解析內容...")
+            parsed_records = []
+            
+            for line in lines:
+                time_match = re.match(r'^(\d{4}年\d{2}月\d{2}日\s+\d{2}:\d{2}:\d{2})\s*-\s*(.*)', line)
+                if not time_match:
+                    time_match = re.match(r'^\[(.*?)\]\s*(.*)', line)
+                
+                if time_match:
+                    t_str = time_match.group(1)
+                    rest = time_match.group(2)
+                    
+                    m_timer = re.search(r'計時器:\s*([\d.]+)\s*分鐘\s*->\s*([\d.]+)\s*元', rest)
+                    m_calc = re.search(r'算式:.*?([\d.]+)\s*分鐘\s*->\s*([\d.]+)\s*元', rest)
+                    m_manual = re.search(r'\[手動\]\s*([\d.]+)', rest)
+                    
+                    if m_timer:
+                        mins_v = float(m_timer.group(1))
+                        cost_v = float(m_timer.group(2))
+                        parsed_records.append({"time": t_str, "minutes": mins_v, "cost": cost_v, "note": "計時器存檔"})
+                    elif m_calc:
+                        mins_v = float(m_calc.group(1))
+                        cost_v = float(m_calc.group(2))
+                        parsed_records.append({"time": t_str, "minutes": mins_v, "cost": cost_v, "note": "算式存檔"})
+                    elif m_manual:
+                        val = float(m_manual.group(1))
+                        parsed_records.append({"time": t_str, "minutes": round_half_up(val), "cost": round_half_up(val * 0.1), "note": "手動紀錄"})
+
+            if parsed_records:
+                st.write(f"🎉 成功解析出 **{len(parsed_records)}** 筆舊版歷史紀錄：")
+                st.dataframe(pd.DataFrame(parsed_records)[["time", "minutes", "cost", "note"]])
+                if st.button("📥 確認匯入這些歷史紀錄", type="primary"):
+                    st.session_state.history.extend(parsed_records)
+                    save_history(st.session_state.history)
+                    st.success("歷史紀錄已順利匯入完成！")
+                    st.rerun()
+            else:
+                st.warning("⚠️ 無法識別此檔案內容，請確認是否為正確的備份檔。")
 
     st.markdown("---")
     st.write("##### 📋 歷史紀錄與波幣資產下載")
