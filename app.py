@@ -156,11 +156,8 @@ with tab1:
     multiplier = 2 if st.session_state.is_double else 1
     cost = round_half_up((Decimal(elapsed) * Decimal('0.1') / Decimal('60')) * Decimal(multiplier))
 
-    # 使用動態顯示
-    metric_container = st.container()
-    with metric_container:
-        st.metric(label="累積時間", value=time_str)
-        st.metric(label="已使用金額 (0.1元/分)", value=f"{cost:.2f} 元", delta="2x 雙倍計費中" if st.session_state.is_double else None)
+    st.metric(label="累積時間", value=time_str)
+    st.metric(label="已使用金額 (0.1元/分)", value=f"{cost:.2f} 元", delta="2x 雙倍計費中" if st.session_state.is_double else None)
 
     st.session_state.is_double = st.checkbox("啟用雙倍計費 (2x)", value=st.session_state.is_double)
 
@@ -204,7 +201,6 @@ with tab1:
             else:
                 st.warning("時間為 0，無需存檔！")
 
-    # 若計時器運作中，每秒刷新一次以避免過度卡頓
     if st.session_state.timer_running:
         time.sleep(1)
         st.rerun()
@@ -267,38 +263,82 @@ with tab2:
                 st.rerun()
 
     st.markdown("---")
-    # ==================== 上傳/匯入歷史紀錄 ====================
-    st.write("##### 📂 手動上傳/匯入歷史紀錄檔案")
-    uploaded_file = st.file_uploader("選擇上傳之前下載的 CSV 備份檔案:", type=["csv"])
+    # ==================== 支援 TXT 及 CSV 檔案上傳 ====================
+    st.write("##### 📂 上傳/匯入歷史備份檔 (支援 bo_coins.txt / billing_history.txt / CSV)")
+    uploaded_file = st.file_uploader("選擇上傳手機裡的舊備份檔案:", type=["txt", "csv"])
+    
     if uploaded_file is not None:
-        try:
-            df_uploaded = pd.read_csv(uploaded_file)
-            # 濾除摘要文字列並讀取明細
-            new_records = []
-            for _, row in df_uploaded.iterrows():
-                time_val = str(row.get("時間", ""))
-                if "資產" in time_val or "摘要" in time_val or "當前" in time_val or "歷史" in time_val:
-                    continue
-                try:
-                    mins_v = float(row.get("分鐘", 0))
-                    cost_v = float(row.get("金額(元)", 0))
-                    note_v = str(row.get("備註", "匯入紀錄"))
-                    new_records.append({
-                        "time": time_val,
-                        "minutes": mins_v,
-                        "cost": cost_v,
-                        "note": note_v
+        file_name = uploaded_file.name
+        content = uploaded_file.read().decode("utf-8", errors="ignore")
+        
+        # 情況 A：上傳的是 bo_coins.txt
+        if "bo_coins" in file_name or (content.strip().replace('.', '', 1).isdigit() and len(content.strip().splitlines()) == 1):
+            try:
+                coin_val = float(content.strip())
+                st.info(f"偵測到波幣檔案！數值為：**{coin_val}** 波幣")
+                if st.button("🪙 匯入並覆蓋波幣餘額", type="primary"):
+                    st.session_state.bo_coins = coin_val
+                    save_wallet(coin_val)
+                    st.success(f"已將波幣更新為 {coin_val}！")
+                    st.rerun()
+            except Exception:
+                st.error("解析波幣檔案失敗，請確定內容為數字。")
+
+        # 情況 B：上傳的是 TXT 格式紀錄檔
+        elif file_name.endswith(".txt"):
+            st.info("偵測到 TXT 文字紀錄檔！")
+            parsed_records = []
+            lines = content.splitlines()
+            for line in lines:
+                # 簡單解析格式： [時間] xx分鐘 | xx元
+                match = re.search(r'\[(.*?)\]\s*([\d.]+)\s*分鐘\s*\|\s*([\d.]+)\s*元(?:\|\s*(.*))?', line)
+                if match:
+                    t_str, m_str, c_str, n_str = match.groups()
+                    parsed_records.append({
+                        "time": t_str,
+                        "minutes": float(m_str),
+                        "cost": float(c_str),
+                        "note": n_str if n_str else "TXT匯入"
                     })
-                except Exception:
-                    pass
-            
-            if st.button("📥 確認匯入此檔案紀錄", type="primary"):
-                st.session_state.history.extend(new_records)
-                save_history(st.session_state.history)
-                st.success(f"成功匯入 {len(new_records)} 筆紀錄！")
-                st.rerun()
-        except Exception as e:
-            st.error("讀取檔案失敗，請確保上傳正確的 CSV 備份檔！")
+            if parsed_records:
+                st.write(f"成功解析出 **{len(parsed_records)}** 筆紀錄！")
+                if st.button("📥 確認匯入這些歷史紀錄", type="primary"):
+                    st.session_state.history.extend(parsed_records)
+                    save_history(st.session_state.history)
+                    st.success("紀錄匯入成功！")
+                    st.rerun()
+            else:
+                st.warning("檔案中找不到可對應的紀錄格式。")
+
+        # 情況 C：上傳的是 CSV 檔
+        elif file_name.endswith(".csv"):
+            try:
+                uploaded_file.seek(0)
+                df_uploaded = pd.read_csv(uploaded_file)
+                new_records = []
+                for _, row in df_uploaded.iterrows():
+                    time_val = str(row.get("時間", ""))
+                    if "資產" in time_val or "摘要" in time_val or "當前" in time_val or "歷史" in time_val:
+                        continue
+                    try:
+                        mins_v = float(row.get("分鐘", 0))
+                        cost_v = float(row.get("金額(元)", 0))
+                        note_v = str(row.get("備註", "CSV匯入"))
+                        new_records.append({
+                            "time": time_val,
+                            "minutes": mins_v,
+                            "cost": cost_v,
+                            "note": note_v
+                        })
+                    except Exception:
+                        pass
+                if st.button("📥 確認匯入此 CSV 紀錄", type="primary"):
+                    st.session_state.history.extend(new_records)
+                    save_history(st.session_state.history)
+                    st.success(f"成功匯入 {len(new_records)} 筆紀錄！")
+                    st.rerun()
+            except Exception:
+                st.error("CSV 格式解析失敗！")
 
     st.markdown("---")
     st.write("##### 📋 歷史紀錄與波幣資產下載")
@@ -308,7 +348,6 @@ with tab2:
     
     st.write(f"📊 **歷史加總**：總時間 **{total_mins:.2f}** 分鐘 | 總金額 **{total_cost:.2f}** 元")
 
-    # 下載報表區塊
     export_list = list(st.session_state.history)
     df_export = pd.DataFrame(export_list)
     if not df_export.empty:
