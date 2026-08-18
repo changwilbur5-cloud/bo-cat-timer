@@ -122,15 +122,32 @@ def check_lottery():
 
 check_lottery()
 
-# JavaScript 全螢幕觸發元件
+# 全螢幕 JavaScript 元件
 fullscreen_js = """
 <script>
 function toggleFullScreen() {
-  if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {});
+  var doc = window.parent.document;
+  var docEl = doc.documentElement;
+
+  if (!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) {
+    if (docEl.requestFullscreen) {
+      docEl.requestFullscreen();
+    } else if (docEl.msRequestFullscreen) {
+      docEl.msRequestFullscreen();
+    } else if (docEl.mozRequestFullScreen) {
+      docEl.mozRequestFullScreen();
+    } else if (docEl.webkitRequestFullscreen) {
+      docEl.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT);
+    }
   } else {
-    if (document.exitFullscreen) {
-      document.exitFullscreen();
+    if (doc.exitFullscreen) {
+      doc.exitFullscreen();
+    } else if (doc.msExitFullscreen) {
+      doc.msExitFullscreen();
+    } else if (doc.mozCancelFullScreen) {
+      doc.mozCancelFullScreen();
+    } else if (doc.webkitExitFullscreen) {
+      doc.webkitExitFullscreen();
     }
   }
 }
@@ -145,7 +162,7 @@ function toggleFullScreen() {
     font-weight: bold;
     font-size: 16px;
     cursor: pointer;
-    margin-bottom: 10px;">
+    margin-bottom: 5px;">
     📺 切換全螢幕 / 退出全螢幕
 </button>
 """
@@ -157,7 +174,7 @@ tab1, tab2, tab3 = st.tabs(["⏱️ 計時器模式", "✎ 算式與紀錄", "�
 
 # -------------------- TAB 1: 計時器模式 --------------------
 with tab1:
-    st.components.v1.html(fullscreen_js, height=50)
+    st.components.v1.html(fullscreen_js, height=55)
     
     st.subheader("▶ 計時與即時計費")
     
@@ -270,14 +287,14 @@ with tab2:
         if st.button("新增紀錄", use_container_width=True):
             if m_mins > 0 or m_cost > 0:
                 dt_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                rec = {"time": dt_now, "minutes": round_half_up(m_mins), "cost": round_half_up(m_cost), "note": "手動寫入"}
+                rec = {"time": dt_now, "minutes": round_half_up(m_mins), "cost": round_half_up(m_cost), "note": "手動紀錄"}
                 st.session_state.history.append(rec)
                 save_history(st.session_state.history)
                 st.success("手動紀錄新增成功！")
                 st.rerun()
 
     st.markdown("---")
-    # ==================== 全自動偵測檔案類型與匯入 (強化防呆版) ====================
+    # ==================== 超級強化版全自動偵測與解析引擎 ====================
     st.write("##### 📂 上傳/匯入歷史備份檔 (全自動辨識)")
     uploaded_file = st.file_uploader("選擇上傳手機裡的舊備份檔案 (TXT 或 CSV):", type=["txt", "csv"])
     
@@ -289,8 +306,8 @@ with tab2:
         is_coin_file = False
         coin_val = 0.0
 
-        # 【自動檢測 1】：是否為波幣檔
-        if "bo_coins" in file_name or (len(lines) == 1 and safe_float(lines[0]) > 0 and not "年" in lines[0]):
+        # 檢測波幣檔
+        if "bo_coins" in file_name or (len(lines) == 1 and safe_float(lines[0]) > 0 and "年" not in lines[0] and "-" not in lines[0]):
             coin_val = safe_float(lines[0])
             if coin_val >= 0:
                 is_coin_file = True
@@ -303,7 +320,7 @@ with tab2:
                 st.success(f"已成功將波幣餘額更新為：{coin_val}！")
                 st.rerun()
         
-        # 【自動檢測 2】：CSV 紀錄檔
+        # 檢測 CSV
         elif file_name.endswith(".csv"):
             try:
                 uploaded_file.seek(0)
@@ -334,43 +351,46 @@ with tab2:
             except Exception:
                 st.error("CSV 格式解析失敗！")
 
-        # 【自動檢測 3】：TXT 歷史紀錄檔 (billing_history.txt)
+        # 萬能 TXT 解析引擎
         else:
             st.info("📋 **自動偵測結果：TXT 歷史紀錄檔**！正在解析內容...")
             parsed_records = []
             
             for line in lines:
-                time_match = re.match(r'^(\d{4}年\d{2}月\d{2}日\s+\d{2}:\d{2}:\d{2})\s*-\s*(.*)', line)
-                if not time_match:
-                    time_match = re.match(r'^\[(.*?)\]\s*(.*)', line)
-                
-                if time_match:
-                    t_str = time_match.group(1)
-                    rest = time_match.group(2)
-                    
-                    m_timer = re.search(r'計時器:\s*([\d.]+)\s*分鐘\s*->\s*([\d.]+)\s*元', rest)
-                    m_calc = re.search(r'算式:.*?([\d.]+)\s*分鐘\s*->\s*([\d.]+)\s*元', rest)
-                    m_manual = re.search(r'\[手動\]\s*([\d.]+)', rest)
-                    
-                    try:
-                        if m_timer:
-                            mins_v = safe_float(m_timer.group(1))
-                            cost_v = safe_float(m_timer.group(2))
-                            parsed_records.append({"time": t_str, "minutes": mins_v, "cost": cost_v, "note": "計時器存檔"})
-                        elif m_calc:
-                            mins_v = safe_float(m_calc.group(1))
-                            cost_v = safe_float(m_calc.group(2))
-                            parsed_records.append({"time": t_str, "minutes": mins_v, "cost": cost_v, "note": "算式存檔"})
-                        elif m_manual:
-                            val = safe_float(m_manual.group(1))
-                            parsed_records.append({"time": t_str, "minutes": round_half_up(val), "cost": round_half_up(val * 0.1), "note": "手動紀錄"})
-                    except Exception:
-                        pass
+                # 1. 抓取時間字串 (支援 YYYY年MM月DD日 HH:MM:SS 或 [YYYY-MM-DD HH:MM:SS])
+                time_match = re.search(r'(\d{4}[年-]\d{2}[月-]\d{2}[日]?\s+\d{2}:\d{2}:\d{2})', line)
+                time_str = time_match.group(1) if time_match else datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                # 2. 抓取分鐘數 (匹配 "xx分鐘" 或 "時間:xx.xx分鐘" 或 "使用了 xx.xx 分鐘")
+                mins_match = re.search(r'([\d.]+)\s*分鐘', line)
+                mins_v = safe_float(mins_match.group(1)) if mins_match else 0.0
+
+                # 3. 抓取金額 (匹配 "等於 xx.xx 元" 或 "金額:xx.xx元" 或 "-> xx.xx元")
+                cost_match = re.search(r'(?:等於|金額:|->)\s*([\d.]+)\s*元', line)
+                if cost_match:
+                    cost_v = safe_float(cost_match.group(1))
+                else:
+                    cost_v = round_half_up(mins_v * 0.1)
+
+                # 4. 判斷標籤/備註
+                note_v = "歷史備份"
+                if "[手動]" in line or "(手動)" in line:
+                    note_v = "手動紀錄"
+                elif "計時器" in line:
+                    note_v = "計時器存檔"
+
+                if mins_v > 0 or cost_v > 0:
+                    parsed_records.append({
+                        "time": time_str,
+                        "minutes": round_half_up(mins_v),
+                        "cost": round_half_up(cost_v),
+                        "note": note_v
+                    })
 
             if parsed_records:
-                st.write(f"🎉 成功解析出 **{len(parsed_records)}** 筆舊版歷史紀錄：")
+                st.success(f"🎉 成功解析出 **{len(parsed_records)}** 筆歷史紀錄！")
                 st.dataframe(pd.DataFrame(parsed_records)[["time", "minutes", "cost", "note"]])
-                if st.button("📥 確認匯入這些歷史紀錄", type="primary"):
+                if st.button("📥 確認匯入這些歷史紀錄", type="primary", use_container_width=True):
                     st.session_state.history.extend(parsed_records)
                     save_history(st.session_state.history)
                     st.success("歷史紀錄已順利匯入完成！")
@@ -463,7 +483,7 @@ with tab2:
 
 # -------------------- TAB 3: 全螢幕/獨立收銀畫面 --------------------
 with tab3:
-    st.components.v1.html(fullscreen_js, height=50)
+    st.components.v1.html(fullscreen_js, height=55)
     st.subheader("💵 收銀結帳頁面")
     
     total_checkout_cost = sum(item.get("cost", 0) for item in st.session_state.history)
