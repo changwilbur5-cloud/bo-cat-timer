@@ -8,6 +8,9 @@ import pandas as pd
 from decimal import Decimal, ROUND_HALF_UP
 import streamlit as st
 
+# ==================== 設定密碼 ====================
+SECURITY_PASSWORD = "b1771016"
+
 # ==================== 工具函式 ====================
 def round_half_up(val, decimals=2):
     """標準四捨五入"""
@@ -294,7 +297,7 @@ with tab2:
                 st.rerun()
 
     st.markdown("---")
-    # ==================== 超級強化版全自動偵測與解析引擎 ====================
+    # ==================== 全自動偵測與解析引擎 ====================
     st.write("##### 📂 上傳/匯入歷史備份檔 (全自動辨識)")
     uploaded_file = st.file_uploader("選擇上傳手機裡的舊備份檔案 (TXT 或 CSV):", type=["txt", "csv"])
     
@@ -306,7 +309,6 @@ with tab2:
         is_coin_file = False
         coin_val = 0.0
 
-        # 檢測波幣檔
         if "bo_coins" in file_name or (len(lines) == 1 and safe_float(lines[0]) > 0 and "年" not in lines[0] and "-" not in lines[0]):
             coin_val = safe_float(lines[0])
             if coin_val >= 0:
@@ -320,7 +322,6 @@ with tab2:
                 st.success(f"已成功將波幣餘額更新為：{coin_val}！")
                 st.rerun()
         
-        # 檢測 CSV
         elif file_name.endswith(".csv"):
             try:
                 uploaded_file.seek(0)
@@ -351,28 +352,23 @@ with tab2:
             except Exception:
                 st.error("CSV 格式解析失敗！")
 
-        # 萬能 TXT 解析引擎
         else:
             st.info("📋 **自動偵測結果：TXT 歷史紀錄檔**！正在解析內容...")
             parsed_records = []
             
             for line in lines:
-                # 1. 抓取時間字串 (支援 YYYY年MM月DD日 HH:MM:SS 或 [YYYY-MM-DD HH:MM:SS])
                 time_match = re.search(r'(\d{4}[年-]\d{2}[月-]\d{2}[日]?\s+\d{2}:\d{2}:\d{2})', line)
                 time_str = time_match.group(1) if time_match else datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                # 2. 抓取分鐘數 (匹配 "xx分鐘" 或 "時間:xx.xx分鐘" 或 "使用了 xx.xx 分鐘")
                 mins_match = re.search(r'([\d.]+)\s*分鐘', line)
                 mins_v = safe_float(mins_match.group(1)) if mins_match else 0.0
 
-                # 3. 抓取金額 (匹配 "等於 xx.xx 元" 或 "金額:xx.xx元" 或 "-> xx.xx元")
                 cost_match = re.search(r'(?:等於|金額:|->)\s*([\d.]+)\s*元', line)
                 if cost_match:
                     cost_v = safe_float(cost_match.group(1))
                 else:
                     cost_v = round_half_up(mins_v * 0.1)
 
-                # 4. 判斷標籤/備註
                 note_v = "歷史備份"
                 if "[手動]" in line or "(手動)" in line:
                     note_v = "手動紀錄"
@@ -454,6 +450,10 @@ with tab2:
         )
 
     st.markdown("---")
+    st.write("##### 🔒 管理員操作區 (需要刪除密碼)")
+    
+    # 刪除與清空密碼驗證
+    del_pwd = st.text_input("輸入刪除管理密碼:", type="password", key="del_pwd_input")
 
     records_to_keep = []
     has_deleted = False
@@ -466,20 +466,28 @@ with tab2:
         del_btn = c4.button("🗑️", key=f"del_{idx}")
         
         if del_btn:
-            has_deleted = True
+            if del_pwd == SECURITY_PASSWORD:
+                has_deleted = True
+            else:
+                st.error("🔒 密碼錯誤，無法刪除！")
+                records_to_keep.append(item)
         else:
             records_to_keep.append(item)
 
     if has_deleted:
         st.session_state.history = records_to_keep
         save_history(st.session_state.history)
+        st.success("已成功刪除該筆紀錄！")
         st.rerun()
 
     if st.button("🗑️ 清空所有歷史紀錄", type="secondary"):
-        st.session_state.history = []
-        save_history([])
-        st.success("紀錄已清空！")
-        st.rerun()
+        if del_pwd == SECURITY_PASSWORD:
+            st.session_state.history = []
+            save_history([])
+            st.success("紀錄已清空！")
+            st.rerun()
+        else:
+            st.error("🔒 密碼錯誤，無法清空紀錄！")
 
 # -------------------- TAB 3: 全螢幕/獨立收銀畫面 --------------------
 with tab3:
@@ -509,8 +517,15 @@ with tab3:
     else:
         st.error(f"⚠️ **尚欠金額**：**{abs(change):.2f}** 元")
 
+    st.markdown("---")
+    checkout_pwd = st.text_input("🔑 請輸入收銀確認密碼:", type="password", key="checkout_pwd_input")
+
     if st.button("✅ 確定完成結帳（扣除波幣並清空紀錄）", type="primary", use_container_width=True):
-        if use_coins <= st.session_state.bo_coins:
+        if checkout_pwd != SECURITY_PASSWORD:
+            st.error("🔒 收銀密碼錯誤，無法進行結帳！")
+        elif use_coins > st.session_state.bo_coins:
+            st.error("波幣不足，無法完成結帳！")
+        else:
             st.session_state.bo_coins -= use_coins
             save_wallet(st.session_state.bo_coins)
             
@@ -519,5 +534,3 @@ with tab3:
             
             st.success("🎉 結帳完畢！波幣已扣除，歷史紀錄已自動歸零！")
             st.rerun()
-        else:
-            st.error("波幣不足，無法完成結帳！")
