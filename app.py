@@ -16,7 +16,21 @@ def round_half_up(val, decimals=2):
         fmt = '0.' + '0' * decimals if decimals > 0 else '0'
         return float(d.quantize(Decimal(fmt), rounding=ROUND_HALF_UP))
     except Exception:
-        return round(float(val), decimals)
+        try:
+            return round(float(val), decimals)
+        except Exception:
+            return 0.0
+
+def safe_float(val_str):
+    """安全轉換浮點數，解決多小數點問題 (例 5.02.79 -> 5.02)"""
+    try:
+        s = str(val_str).strip()
+        parts = s.split('.')
+        if len(parts) > 2:
+            s = f"{parts[0]}.{parts[1]}"
+        return float(s)
+    except Exception:
+        return 0.0
 
 HISTORY_FILE = "history_records.json"
 WALLET_FILE = "bo_coins.json"
@@ -263,7 +277,7 @@ with tab2:
                 st.rerun()
 
     st.markdown("---")
-    # ==================== 全自動偵測檔案類型與匯入 ====================
+    # ==================== 全自動偵測檔案類型與匯入 (強化防呆版) ====================
     st.write("##### 📂 上傳/匯入歷史備份檔 (全自動辨識)")
     uploaded_file = st.file_uploader("選擇上傳手機裡的舊備份檔案 (TXT 或 CSV):", type=["txt", "csv"])
     
@@ -275,15 +289,13 @@ with tab2:
         is_coin_file = False
         coin_val = 0.0
 
-        # 【自動檢測條件 1】：是否為波幣檔
-        if "bo_coins" in file_name or (len(lines) == 1 and lines[0].replace('.', '', 1).isdigit()):
-            try:
-                coin_val = float(lines[0])
+        # 【自動檢測 1】：是否為波幣檔
+        if "bo_coins" in file_name or (len(lines) == 1 and safe_float(lines[0]) > 0 and not "年" in lines[0]):
+            coin_val = safe_float(lines[0])
+            if coin_val >= 0:
                 is_coin_file = True
-            except Exception:
-                is_coin_file = False
 
-        if is_coin_file:
+        if is_coin_file and "billing_history" not in file_name:
             st.info(f"🪙 **自動偵測結果：波幣備份檔**！找到數值 **{coin_val}** 波幣")
             if st.button("🪙 匯入並更新波幣餘額", type="primary"):
                 st.session_state.bo_coins = coin_val
@@ -291,7 +303,7 @@ with tab2:
                 st.success(f"已成功將波幣餘額更新為：{coin_val}！")
                 st.rerun()
         
-        # 【自動檢測條件 2】：是否為 CSV 紀錄檔
+        # 【自動檢測 2】：CSV 紀錄檔
         elif file_name.endswith(".csv"):
             try:
                 uploaded_file.seek(0)
@@ -302,8 +314,8 @@ with tab2:
                     if "資產" in time_val or "摘要" in time_val or "當前" in time_val or "歷史" in time_val:
                         continue
                     try:
-                        mins_v = float(row.get("分鐘", 0))
-                        cost_v = float(row.get("金額(元)", 0))
+                        mins_v = safe_float(row.get("分鐘", 0))
+                        cost_v = safe_float(row.get("金額(元)", 0))
                         note_v = str(row.get("備註", "CSV匯入"))
                         new_records.append({
                             "time": time_val,
@@ -322,7 +334,7 @@ with tab2:
             except Exception:
                 st.error("CSV 格式解析失敗！")
 
-        # 【自動檢測條件 3】：是否為 TXT 歷史紀錄檔 (billing_history.txt)
+        # 【自動檢測 3】：TXT 歷史紀錄檔 (billing_history.txt)
         else:
             st.info("📋 **自動偵測結果：TXT 歷史紀錄檔**！正在解析內容...")
             parsed_records = []
@@ -340,17 +352,20 @@ with tab2:
                     m_calc = re.search(r'算式:.*?([\d.]+)\s*分鐘\s*->\s*([\d.]+)\s*元', rest)
                     m_manual = re.search(r'\[手動\]\s*([\d.]+)', rest)
                     
-                    if m_timer:
-                        mins_v = float(m_timer.group(1))
-                        cost_v = float(m_timer.group(2))
-                        parsed_records.append({"time": t_str, "minutes": mins_v, "cost": cost_v, "note": "計時器存檔"})
-                    elif m_calc:
-                        mins_v = float(m_calc.group(1))
-                        cost_v = float(m_calc.group(2))
-                        parsed_records.append({"time": t_str, "minutes": mins_v, "cost": cost_v, "note": "算式存檔"})
-                    elif m_manual:
-                        val = float(m_manual.group(1))
-                        parsed_records.append({"time": t_str, "minutes": round_half_up(val), "cost": round_half_up(val * 0.1), "note": "手動紀錄"})
+                    try:
+                        if m_timer:
+                            mins_v = safe_float(m_timer.group(1))
+                            cost_v = safe_float(m_timer.group(2))
+                            parsed_records.append({"time": t_str, "minutes": mins_v, "cost": cost_v, "note": "計時器存檔"})
+                        elif m_calc:
+                            mins_v = safe_float(m_calc.group(1))
+                            cost_v = safe_float(m_calc.group(2))
+                            parsed_records.append({"time": t_str, "minutes": mins_v, "cost": cost_v, "note": "算式存檔"})
+                        elif m_manual:
+                            val = safe_float(m_manual.group(1))
+                            parsed_records.append({"time": t_str, "minutes": round_half_up(val), "cost": round_half_up(val * 0.1), "note": "手動紀錄"})
+                    except Exception:
+                        pass
 
             if parsed_records:
                 st.write(f"🎉 成功解析出 **{len(parsed_records)}** 筆舊版歷史紀錄：")
