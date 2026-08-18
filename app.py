@@ -54,7 +54,12 @@ def get_random_coin_amount():
     return random.choices(amounts, weights=weights, k=1)[0]
 
 # ==================== Session State 初始化 ====================
-st.set_page_config(page_title="波貓計時與收銀系統", page_icon="🐱", layout="centered")
+st.set_page_config(
+    page_title="波貓計時與收銀系統", 
+    page_icon="🐱", 
+    layout="centered",
+    initial_sidebar_state="collapsed"
+)
 
 if "bo_coins" not in st.session_state:
     st.session_state.bo_coins = load_wallet()
@@ -103,6 +108,34 @@ def check_lottery():
 
 check_lottery()
 
+# JavaScript 全螢幕觸發元件
+fullscreen_js = """
+<script>
+function toggleFullScreen() {
+  if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(err => {});
+  } else {
+    if (document.exitFullscreen) {
+      document.exitFullscreen();
+    }
+  }
+}
+</script>
+<button onclick="toggleFullScreen()" style="
+    width: 100%;
+    padding: 10px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 16px;
+    cursor: pointer;
+    margin-bottom: 10px;">
+    📺 切換全螢幕 / 退出全螢幕
+</button>
+"""
+
 # ==================== 頁面導航 ====================
 st.title("🐾 波貓計時與收銀系統")
 
@@ -110,6 +143,8 @@ tab1, tab2, tab3 = st.tabs(["⏱️ 計時器模式", "✎ 算式與紀錄", "�
 
 # -------------------- TAB 1: 計時器模式 --------------------
 with tab1:
+    st.components.v1.html(fullscreen_js, height=50)
+    
     st.subheader("▶ 計時與即時計費")
     
     elapsed = get_elapsed_seconds()
@@ -119,11 +154,13 @@ with tab1:
     time_str = f"{hrs:02d}:{mins:02d}:{secs:02d}"
 
     multiplier = 2 if st.session_state.is_double else 1
-    # 0.1 元 / 分鐘
     cost = round_half_up((Decimal(elapsed) * Decimal('0.1') / Decimal('60')) * Decimal(multiplier))
 
-    st.metric(label="累積時間", value=time_str)
-    st.metric(label="已使用金額 (0.1元/分)", value=f"{cost:.2f} 元", delta="2x 雙倍計費中" if st.session_state.is_double else None)
+    # 使用動態顯示
+    metric_container = st.container()
+    with metric_container:
+        st.metric(label="累積時間", value=time_str)
+        st.metric(label="已使用金額 (0.1元/分)", value=f"{cost:.2f} 元", delta="2x 雙倍計費中" if st.session_state.is_double else None)
 
     st.session_state.is_double = st.checkbox("啟用雙倍計費 (2x)", value=st.session_state.is_double)
 
@@ -167,6 +204,11 @@ with tab1:
             else:
                 st.warning("時間為 0，無需存檔！")
 
+    # 若計時器運作中，每秒刷新一次以避免過度卡頓
+    if st.session_state.timer_running:
+        time.sleep(1)
+        st.rerun()
+
 # -------------------- TAB 2: 算式、手動寫入與紀錄 --------------------
 with tab2:
     st.subheader("✎ 算式計算與歷史紀錄")
@@ -206,7 +248,7 @@ with tab2:
 
     st.markdown("---")
     
-    st.write("##### ✍️ 手動寫入紀錄")
+    st.write("##### ✍️ 手動新增單筆紀錄")
     m_col1, m_col2, m_col3 = st.columns([2, 2, 1])
     with m_col1:
         m_mins = st.number_input("時間 (分鐘)", min_value=0.0, step=1.0)
@@ -225,6 +267,40 @@ with tab2:
                 st.rerun()
 
     st.markdown("---")
+    # ==================== 上傳/匯入歷史紀錄 ====================
+    st.write("##### 📂 手動上傳/匯入歷史紀錄檔案")
+    uploaded_file = st.file_uploader("選擇上傳之前下載的 CSV 備份檔案:", type=["csv"])
+    if uploaded_file is not None:
+        try:
+            df_uploaded = pd.read_csv(uploaded_file)
+            # 濾除摘要文字列並讀取明細
+            new_records = []
+            for _, row in df_uploaded.iterrows():
+                time_val = str(row.get("時間", ""))
+                if "資產" in time_val or "摘要" in time_val or "當前" in time_val or "歷史" in time_val:
+                    continue
+                try:
+                    mins_v = float(row.get("分鐘", 0))
+                    cost_v = float(row.get("金額(元)", 0))
+                    note_v = str(row.get("備註", "匯入紀錄"))
+                    new_records.append({
+                        "time": time_val,
+                        "minutes": mins_v,
+                        "cost": cost_v,
+                        "note": note_v
+                    })
+                except Exception:
+                    pass
+            
+            if st.button("📥 確認匯入此檔案紀錄", type="primary"):
+                st.session_state.history.extend(new_records)
+                save_history(st.session_state.history)
+                st.success(f"成功匯入 {len(new_records)} 筆紀錄！")
+                st.rerun()
+        except Exception as e:
+            st.error("讀取檔案失敗，請確保上傳正確的 CSV 備份檔！")
+
+    st.markdown("---")
     st.write("##### 📋 歷史紀錄與波幣資產下載")
 
     total_mins = sum(item.get("minutes", 0) for item in st.session_state.history)
@@ -232,16 +308,12 @@ with tab2:
     
     st.write(f"📊 **歷史加總**：總時間 **{total_mins:.2f}** 分鐘 | 總金額 **{total_cost:.2f}** 元")
 
-    # ==================== 下載功能區塊 (包含波幣) ====================
-    # 建立包含波幣資訊的資料清單
+    # 下載報表區塊
     export_list = list(st.session_state.history)
-    
-    # 1. 匯出 CSV (加上波幣資訊列)
     df_export = pd.DataFrame(export_list)
     if not df_export.empty:
         df_export.columns = ["時間", "分鐘", "金額(元)", "備註"]
     
-    # 建立包含資產摘要的 CSV
     summary_data = pd.DataFrame([
         {"時間": "--- 資產摘要 ---", "分鐘": "", "金額(元)": "", "備註": ""},
         {"時間": "當前波幣總額", "分鐘": f"{st.session_state.bo_coins:.2f} 幣", "金額(元)": f"{st.session_state.bo_coins*0.1:.2f} 元", "備註": "1波幣=1分鐘"},
@@ -251,15 +323,13 @@ with tab2:
     df_combined = pd.concat([df_export, summary_data], ignore_index=True) if not df_export.empty else summary_data
     csv_data = df_combined.to_csv(index=False, encoding='utf-8-sig')
 
-    # 2. 匯出 TXT 文字檔 (包含波幣資產)
     txt_content = f"=========================================\n"
     txt_content += f"   🐾 波貓系統完整報表 ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n"
     txt_content += f"=========================================\n"
-    txt_content += f"🪙 目前波幣資產：{st.session_state.bo_coins:.2f} 波幣 (可折抵 {st.session_state.bo_coins*0.1:.2f} 元)\n"
+    txt_content += f"🪙 目前波幣資產：{st.session_state.bo_coins:.2f} 波幣\n"
     txt_content += f"⏱️ 歷史累計總時間：{total_mins:.2f} 分鐘\n"
     txt_content += f"💰 歷史累計總金額：{total_cost:.2f} 元\n"
     txt_content += f"-----------------------------------------\n"
-    txt_content += f"【歷史明細紀錄】\n"
     
     if st.session_state.history:
         for item in st.session_state.history:
@@ -288,7 +358,6 @@ with tab2:
 
     st.markdown("---")
 
-    # 紀錄清單列表與個別刪除
     records_to_keep = []
     has_deleted = False
 
@@ -317,6 +386,7 @@ with tab2:
 
 # -------------------- TAB 3: 全螢幕/獨立收銀畫面 --------------------
 with tab3:
+    st.components.v1.html(fullscreen_js, height=50)
     st.subheader("💵 收銀結帳頁面")
     
     total_checkout_cost = sum(item.get("cost", 0) for item in st.session_state.history)
@@ -354,4 +424,3 @@ with tab3:
             st.rerun()
         else:
             st.error("波幣不足，無法完成結帳！")
-      
