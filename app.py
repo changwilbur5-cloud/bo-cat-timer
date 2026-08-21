@@ -41,12 +41,12 @@ def safe_float(val_str):
 def load_cloud_data():
     """從雲端載入波幣與歷史紀錄"""
     try:
-        resp = requests.get(JSONBIN_URL + "/latest", headers={"X-Bin-Meta": "false"}, timeout=3)
+        resp = requests.get(JSONBIN_URL + "/latest", headers={"X-Bin-Meta": "false"}, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
             return data.get("bo_coins", 0.0), data.get("history", [])
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"雲端讀取失敗：{e}")
     return 0.0, []
 
 def save_cloud_data(bo_coins, history):
@@ -57,9 +57,16 @@ def save_cloud_data(bo_coins, history):
             "history": history
         }
         headers = {"Content-Type": "application/json"}
-        requests.put(JSONBIN_URL, json=payload, headers=headers, timeout=3)
-    except Exception:
-        pass
+        requests.put(JSONBIN_URL, json=payload, headers=headers, timeout=5)
+    except Exception as e:
+        st.error(f"雲端寫入失敗：{e}")
+
+def sync_from_cloud():
+    """強制手動從雲端同步"""
+    cloud_coins, cloud_history = load_cloud_data()
+    st.session_state.bo_coins = cloud_coins
+    st.session_state.history = cloud_history
+    st.session_state.data_loaded = True
 
 def get_random_coin_amount():
     prizes = [(3.00, 0.5), (2.00, 2.5), (1.00, 7.0), (0.50, 15.0), (0.10, 25.0), (0.03, 50.0)]
@@ -77,10 +84,7 @@ st.set_page_config(
 
 # 啟動時自動從雲端同步資料
 if "data_loaded" not in st.session_state:
-    cloud_coins, cloud_history = load_cloud_data()
-    st.session_state.bo_coins = cloud_coins
-    st.session_state.history = cloud_history
-    st.session_state.data_loaded = True
+    sync_from_cloud()
 
 if "timer_running" not in st.session_state:
     st.session_state.timer_running = False
@@ -168,6 +172,12 @@ function toggleFullScreen() {
 
 # ==================== 頁面導航 ====================
 st.title("🐾 波貓計時與收銀系統")
+
+# 全域手動同步雲端按鈕
+if st.button("🔄 重新載入雲端最新資料", use_container_width=True):
+    sync_from_cloud()
+    st.success("已重新對接雲端資料庫！")
+    st.rerun()
 
 tab1, tab2, tab3 = st.tabs(["⏱️ 計時器模式", "✎ 算式與紀錄", "💵 收銀結帳"])
 
@@ -439,7 +449,6 @@ with tab2:
         txt_str += " (無歷史消費紀錄)\n"
     txt_str += f"=========================================\n"
 
-    # 強制轉為帶 BOM 的 bytes (utf-8-sig)
     txt_bytes = txt_str.encode("utf-8-sig")
 
     dl_col1, dl_col2 = st.columns(2)
