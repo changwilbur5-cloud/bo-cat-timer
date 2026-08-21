@@ -292,7 +292,7 @@ with tab2:
                 st.rerun()
 
     st.markdown("---")
-    # ==================== 全自動偵測與解析引擎 (恢復上傳功能) ====================
+    # ==================== 超強防錯 TXT/CSV 解析引擎 ====================
     st.write("##### 📂 上傳/匯入歷史備份檔 (全自動辨識)")
     uploaded_file = st.file_uploader("選擇上傳手機裡的舊備份檔案 (TXT 或 CSV):", type=["txt", "csv"])
     
@@ -355,20 +355,32 @@ with tab2:
                 time_match = re.search(r'(\d{4}[年-]\d{2}[月-]\d{2}[日]?\s+\d{2}:\d{2}:\d{2})', line)
                 time_str = time_match.group(1) if time_match else datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                mins_match = re.search(r'([\d.]+)\s*分鐘', line)
-                mins_v = safe_float(mins_match.group(1)) if mins_match else 0.0
-
-                cost_match = re.search(r'(?:等於|金額:|->)\s*([\d.]+)\s*元', line)
-                if cost_match:
-                    cost_v = safe_float(cost_match.group(1))
-                else:
-                    cost_v = round_half_up(mins_v * 0.1)
-
+                mins_v = 0.0
+                cost_v = 0.0
                 note_v = "歷史備份"
-                if "[手動]" in line or "(手動)" in line:
-                    note_v = "手動紀錄"
-                elif "計時器" in line:
-                    note_v = "計時器存檔"
+
+                # 1. 嘗試比對標準計時器格式： 11.89 分鐘 -> 1.19 元
+                mins_match = re.search(r'([\d.]+)\s*分鐘', line)
+                cost_match = re.search(r'(?:等於|金額:|->)\s*([\d.]+)\s*元', line)
+
+                if mins_match:
+                    mins_v = safe_float(mins_match.group(1))
+                    if cost_match:
+                        cost_v = safe_float(cost_match.group(1))
+                    else:
+                        cost_v = round_half_up(mins_v * 0.1)
+                    if "算式" in line:
+                        note_v = "算式計算"
+                    else:
+                        note_v = "計時器存檔"
+                else:
+                    # 2. 比對手動格式： [手動] 71.18 或 [手動] 5.02.79
+                    manual_match = re.search(r'\[手動\]\s*([\d.]+)', line)
+                    if manual_match:
+                        raw_num = manual_match.group(1)
+                        mins_v = safe_float(raw_num)
+                        cost_v = round_half_up(mins_v * 0.1)
+                        note_v = "手動紀錄"
 
                 if mins_v > 0 or cost_v > 0:
                     parsed_records.append({
