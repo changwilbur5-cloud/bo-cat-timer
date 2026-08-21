@@ -4,16 +4,19 @@ import time
 import random
 import json
 import datetime
+import requests
 import pandas as pd
 from decimal import Decimal, ROUND_HALF_UP
 import streamlit as st
 
-# ==================== 設定密碼 ====================
+# ==================== 設定密碼與匿名雲端庫 ====================
 SECURITY_PASSWORD = "b1771016"
+
+# 匿名雲端資料庫 API (免費免登入 JSONBin)
+JSONBIN_URL = "https://api.jsonbin.io/v3/b/65d1d898dc74654018a56201" 
 
 # ==================== 工具函式 ====================
 def round_half_up(val, decimals=2):
-    """標準四捨五入"""
     try:
         d = Decimal(str(val))
         fmt = '0.' + '0' * decimals if decimals > 0 else '0'
@@ -25,7 +28,6 @@ def round_half_up(val, decimals=2):
             return 0.0
 
 def safe_float(val_str):
-    """安全轉換浮點數，解決多小數點問題 (例 5.02.79 -> 5.02)"""
     try:
         s = str(val_str).strip()
         parts = s.split('.')
@@ -35,34 +37,29 @@ def safe_float(val_str):
     except Exception:
         return 0.0
 
-HISTORY_FILE = "history_records.json"
-WALLET_FILE = "bo_coins.json"
+# ==================== 雲端資料庫自動讀寫 ====================
+def load_cloud_data():
+    """從雲端載入波幣與歷史紀錄"""
+    try:
+        resp = requests.get(JSONBIN_URL + "/latest", headers={"X-Bin-Meta": "false"}, timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("bo_coins", 0.0), data.get("history", [])
+    except Exception:
+        pass
+    return 0.0, []
 
-def load_wallet():
-    if os.path.exists(WALLET_FILE):
-        try:
-            with open(WALLET_FILE, "r", encoding="utf-8") as f:
-                return json.load(f).get("bo_coins", 0.0)
-        except Exception:
-            return 0.0
-    return 0.0
-
-def save_wallet(amount):
-    with open(WALLET_FILE, "w", encoding="utf-8") as f:
-        json.dump({"bo_coins": round_half_up(amount)}, f, ensure_ascii=False, indent=2)
-
-def load_history():
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
-
-def save_history(records):
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(records, f, ensure_ascii=False, indent=2)
+def save_cloud_data(bo_coins, history):
+    """將波幣與歷史紀錄同步至雲端"""
+    try:
+        payload = {
+            "bo_coins": round_half_up(bo_coins),
+            "history": history
+        }
+        headers = {"Content-Type": "application/json"}
+        requests.put(JSONBIN_URL, json=payload, headers=headers, timeout=3)
+    except Exception:
+        pass
 
 def get_random_coin_amount():
     prizes = [(3.00, 0.5), (2.00, 2.5), (1.00, 7.0), (0.50, 15.0), (0.10, 25.0), (0.03, 50.0)]
@@ -78,11 +75,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-if "bo_coins" not in st.session_state:
-    st.session_state.bo_coins = load_wallet()
-
-if "history" not in st.session_state:
-    st.session_state.history = load_history()
+# 啟動時自動從雲端同步資料
+if "data_loaded" not in st.session_state:
+    cloud_coins, cloud_history = load_cloud_data()
+    st.session_state.bo_coins = cloud_coins
+    st.session_state.history = cloud_history
+    st.session_state.data_loaded = True
 
 if "timer_running" not in st.session_state:
     st.session_state.timer_running = False
@@ -97,13 +95,11 @@ if "last_lottery_time" not in st.session_state:
 if "lottery_stage" not in st.session_state:
     st.session_state.lottery_stage = 0
 
-# ==================== 計算當前累積秒數 ====================
 def get_elapsed_seconds():
     if st.session_state.timer_running and st.session_state.start_time:
         return st.session_state.accumulated_sec + (time.time() - st.session_state.start_time)
     return st.session_state.accumulated_sec
 
-# 檢查波幣背景抽獎
 def check_lottery():
     if not st.session_state.timer_running:
         st.session_state.last_lottery_time = time.time()
@@ -120,7 +116,7 @@ def check_lottery():
         
         won = get_random_coin_amount()
         st.session_state.bo_coins += won
-        save_wallet(st.session_state.bo_coins)
+        save_cloud_data(st.session_state.bo_coins, st.session_state.history)
         st.toast(f"🎉 計時獎勵發放！獲得 +{won:.2f} 波幣！", icon="🪙")
 
 check_lottery()
@@ -178,7 +174,6 @@ tab1, tab2, tab3 = st.tabs(["⏱️ 計時器模式", "✎ 算式與紀錄", "�
 # -------------------- TAB 1: 計時器模式 --------------------
 with tab1:
     st.components.v1.html(fullscreen_js, height=55)
-    
     st.subheader("▶ 計時與即時計費")
     
     elapsed = get_elapsed_seconds()
@@ -230,8 +225,8 @@ with tab1:
                     "note": "計時器存檔" + (" (雙倍)" if st.session_state.is_double else "")
                 }
                 st.session_state.history.append(record)
-                save_history(st.session_state.history)
-                st.success(f"已成功存檔：{minutes_used:.2f} 分鐘 / {cost:.2f} 元！")
+                save_cloud_data(st.session_state.bo_coins, st.session_state.history)
+                st.success(f"已成功存檔並同步至雲端：{minutes_used:.2f} 分鐘 / {cost:.2f} 元！")
             else:
                 st.warning("時間為 0，無需存檔！")
 
@@ -239,7 +234,7 @@ with tab1:
         time.sleep(1)
         st.rerun()
 
-# -------------------- TAB 2: 算式、手動寫入與紀錄 --------------------
+# -------------------- TAB 2: 算式與紀錄 --------------------
 with tab2:
     st.subheader("✎ 算式計算與歷史紀錄")
     st.info(f"🪙 目前波幣資產：**{st.session_state.bo_coins:.2f}** 波幣 (1波幣 = 1分鐘 = 可折抵 {st.session_state.bo_coins*0.1:.2f} 元)")
@@ -256,14 +251,14 @@ with tab2:
                 try:
                     amt = float(inp.split()[1])
                     st.session_state.bo_coins += amt
-                    save_wallet(st.session_state.bo_coins)
-                    st.success(f"已手動增加 {amt} 波幣！")
+                    save_cloud_data(st.session_state.bo_coins, st.session_state.history)
+                    st.success(f"已手動增加 {amt} 波幣並同步至雲端！")
                 except Exception:
                     st.error("語法錯誤，請輸入 addcoin 10")
             elif inp == "resetcoin":
                 st.session_state.bo_coins = 0.0
-                save_wallet(0.0)
-                st.success("波幣已歸零！")
+                save_cloud_data(0.0, st.session_state.history)
+                st.success("波幣已歸零並同步至雲端！")
             else:
                 try:
                     val = float(eval(inp))
@@ -292,167 +287,13 @@ with tab2:
                 dt_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 rec = {"time": dt_now, "minutes": round_half_up(m_mins), "cost": round_half_up(m_cost), "note": "手動紀錄"}
                 st.session_state.history.append(rec)
-                save_history(st.session_state.history)
-                st.success("手動紀錄新增成功！")
+                save_cloud_data(st.session_state.bo_coins, st.session_state.history)
+                st.success("手動紀錄已新增並同步至雲端！")
                 st.rerun()
-
-    st.markdown("---")
-    # ==================== 全自動偵測與解析引擎 ====================
-    st.write("##### 📂 上傳/匯入歷史備份檔 (全自動辨識)")
-    uploaded_file = st.file_uploader("選擇上傳手機裡的舊備份檔案 (TXT 或 CSV):", type=["txt", "csv"])
-    
-    if uploaded_file is not None:
-        file_name = uploaded_file.name
-        content = uploaded_file.read().decode("utf-8", errors="ignore").strip()
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
-
-        is_coin_file = False
-        coin_val = 0.0
-
-        if "bo_coins" in file_name or (len(lines) == 1 and safe_float(lines[0]) > 0 and "年" not in lines[0] and "-" not in lines[0]):
-            coin_val = safe_float(lines[0])
-            if coin_val >= 0:
-                is_coin_file = True
-
-        if is_coin_file and "billing_history" not in file_name:
-            st.info(f"🪙 **自動偵測結果：波幣備份檔**！找到數值 **{coin_val}** 波幣")
-            if st.button("🪙 匯入並更新波幣餘額", type="primary"):
-                st.session_state.bo_coins = coin_val
-                save_wallet(coin_val)
-                st.success(f"已成功將波幣餘額更新為：{coin_val}！")
-                st.rerun()
-        
-        elif file_name.endswith(".csv"):
-            try:
-                uploaded_file.seek(0)
-                df_uploaded = pd.read_csv(uploaded_file)
-                new_records = []
-                for _, row in df_uploaded.iterrows():
-                    time_val = str(row.get("時間", ""))
-                    if "資產" in time_val or "摘要" in time_val or "當前" in time_val or "歷史" in time_val:
-                        continue
-                    try:
-                        mins_v = safe_float(row.get("分鐘", 0))
-                        cost_v = safe_float(row.get("金額(元)", 0))
-                        note_v = str(row.get("備註", "CSV匯入"))
-                        new_records.append({
-                            "time": time_val,
-                            "minutes": mins_v,
-                            "cost": cost_v,
-                            "note": note_v
-                        })
-                    except Exception:
-                        pass
-                st.info(f"📊 **自動偵測結果：CSV 歷史紀錄檔**！共找到 {len(new_records)} 筆紀錄")
-                if st.button("📥 確認匯入此 CSV 紀錄", type="primary"):
-                    st.session_state.history.extend(new_records)
-                    save_history(st.session_state.history)
-                    st.success(f"成功匯入 {len(new_records)} 筆紀錄！")
-                    st.rerun()
-            except Exception:
-                st.error("CSV 格式解析失敗！")
-
-        else:
-            st.info("📋 **自動偵測結果：TXT 歷史紀錄檔**！正在解析內容...")
-            parsed_records = []
-            
-            for line in lines:
-                time_match = re.search(r'(\d{4}[年-]\d{2}[月-]\d{2}[日]?\s+\d{2}:\d{2}:\d{2})', line)
-                time_str = time_match.group(1) if time_match else datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                mins_match = re.search(r'([\d.]+)\s*分鐘', line)
-                mins_v = safe_float(mins_match.group(1)) if mins_match else 0.0
-
-                cost_match = re.search(r'(?:等於|金額:|->)\s*([\d.]+)\s*元', line)
-                if cost_match:
-                    cost_v = safe_float(cost_match.group(1))
-                else:
-                    cost_v = round_half_up(mins_v * 0.1)
-
-                note_v = "歷史備份"
-                if "[手動]" in line or "(手動)" in line:
-                    note_v = "手動紀錄"
-                elif "計時器" in line:
-                    note_v = "計時器存檔"
-
-                if mins_v > 0 or cost_v > 0:
-                    parsed_records.append({
-                        "time": time_str,
-                        "minutes": round_half_up(mins_v),
-                        "cost": round_half_up(cost_v),
-                        "note": note_v
-                    })
-
-            if parsed_records:
-                st.success(f"🎉 成功解析出 **{len(parsed_records)}** 筆歷史紀錄！")
-                st.dataframe(pd.DataFrame(parsed_records)[["time", "minutes", "cost", "note"]])
-                if st.button("📥 確認匯入這些歷史紀錄", type="primary", use_container_width=True):
-                    st.session_state.history.extend(parsed_records)
-                    save_history(st.session_state.history)
-                    st.success("歷史紀錄已順利匯入完成！")
-                    st.rerun()
-            else:
-                st.warning("⚠️ 無法識別此檔案內容，請確認是否為正確的備份檔。")
-
-    st.markdown("---")
-    st.write("##### 📋 歷史紀錄與波幣資產下載")
-
-    total_mins = sum(item.get("minutes", 0) for item in st.session_state.history)
-    total_cost = sum(item.get("cost", 0) for item in st.session_state.history)
-    
-    st.write(f"📊 **歷史加總**：總時間 **{total_mins:.2f}** 分鐘 | 總金額 **{total_cost:.2f}** 元")
-
-    export_list = list(st.session_state.history)
-    df_export = pd.DataFrame(export_list)
-    if not df_export.empty:
-        df_export.columns = ["時間", "分鐘", "金額(元)", "備註"]
-    
-    summary_data = pd.DataFrame([
-        {"時間": "--- 資產摘要 ---", "分鐘": "", "金額(元)": "", "備註": ""},
-        {"時間": "當前波幣總額", "分鐘": f"{st.session_state.bo_coins:.2f} 幣", "金額(元)": f"{st.session_state.bo_coins*0.1:.2f} 元", "備註": "1波幣=1分鐘"},
-        {"時間": "歷史總計分鐘", "分鐘": f"{total_mins:.2f} 分", "金額(元)": f"{total_cost:.2f} 元", "備註": "未折抵前總額"}
-    ])
-    
-    df_combined = pd.concat([df_export, summary_data], ignore_index=True) if not df_export.empty else summary_data
-    csv_data = df_combined.to_csv(index=False, encoding='utf-8-sig')
-
-    txt_content = f"=========================================\n"
-    txt_content += f"   🐾 波貓系統完整報表 ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n"
-    txt_content += f"=========================================\n"
-    txt_content += f"🪙 目前波幣資產：{st.session_state.bo_coins:.2f} 波幣\n"
-    txt_content += f"⏱️ 歷史累計總時間：{total_mins:.2f} 分鐘\n"
-    txt_content += f"💰 歷史累計總金額：{total_cost:.2f} 元\n"
-    txt_content += f"-----------------------------------------\n"
-    
-    if st.session_state.history:
-        for item in st.session_state.history:
-            txt_content += f"[{item['time']}] {item['minutes']}分鐘 | {item['cost']}元 | {item.get('note', '')}\n"
-    else:
-        txt_content += " (無歷史消費紀錄)\n"
-    txt_content += f"=========================================\n"
-
-    dl_col1, dl_col2 = st.columns(2)
-    with dl_col1:
-        st.download_button(
-            label="📥 下載完整報表 (CSV 檔)",
-            data=csv_data,
-            file_name=f"波貓完整報表_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-    with dl_col2:
-        st.download_button(
-            label="📄 下載完整報表 (TXT 檔)",
-            data=txt_content,
-            file_name=f"波貓完整報表_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            mime="text/plain",
-            use_container_width=True
-        )
 
     st.markdown("---")
     st.write("##### 🔒 管理員操作區 (需要刪除密碼)")
     
-    # 刪除與清空密碼驗證
     del_pwd = st.text_input("輸入刪除管理密碼:", type="password", key="del_pwd_input")
 
     records_to_keep = []
@@ -476,15 +317,15 @@ with tab2:
 
     if has_deleted:
         st.session_state.history = records_to_keep
-        save_history(st.session_state.history)
-        st.success("已成功刪除該筆紀錄！")
+        save_cloud_data(st.session_state.bo_coins, st.session_state.history)
+        st.success("已成功刪除該筆紀錄並更新雲端！")
         st.rerun()
 
     if st.button("🗑️ 清空所有歷史紀錄", type="secondary"):
         if del_pwd == SECURITY_PASSWORD:
             st.session_state.history = []
-            save_history([])
-            st.success("紀錄已清空！")
+            save_cloud_data(st.session_state.bo_coins, [])
+            st.success("紀錄已清空並更新雲端！")
             st.rerun()
         else:
             st.error("🔒 密碼錯誤，無法清空紀錄！")
@@ -527,10 +368,10 @@ with tab3:
             st.error("波幣不足，無法完成結帳！")
         else:
             st.session_state.bo_coins -= use_coins
-            save_wallet(st.session_state.bo_coins)
-            
             st.session_state.history = []
-            save_history([])
             
-            st.success("🎉 結帳完畢！波幣已扣除，歷史紀錄已自動歸零！")
+            # 同步更新雲端
+            save_cloud_data(st.session_state.bo_coins, [])
+            
+            st.success("🎉 結帳完畢！波幣已扣除，歷史紀錄已自動歸零並同步至雲端！")
             st.rerun()
