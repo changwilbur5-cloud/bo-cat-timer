@@ -4,16 +4,13 @@ import time
 import random
 import json
 import datetime
-import requests
 import pandas as pd
 from decimal import Decimal, ROUND_HALF_UP
 import streamlit as st
 
-# ==================== 設定密碼與匿名雲端庫 ====================
+# ==================== 設定密碼與本地資料檔 ====================
 SECURITY_PASSWORD = "b1771016"
-
-# 匿名雲端資料庫 API (免費免登入 JSONBin)
-JSONBIN_URL = "https://api.jsonbin.io/v3/b/65d1d898dc74654018a56201" 
+DATA_FILE = "bo_cat_data.json"  # 本地持久化資料庫檔案
 
 # ==================== 工具函式 ====================
 def round_half_up(val, decimals=2):
@@ -37,35 +34,35 @@ def safe_float(val_str):
     except Exception:
         return 0.0
 
-# ==================== 雲端資料庫自動讀寫 ====================
-def load_cloud_data():
-    """從雲端載入波幣與歷史紀錄"""
-    try:
-        resp = requests.get(JSONBIN_URL + "/latest", headers={"X-Bin-Meta": "false"}, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("bo_coins", 0.0), data.get("history", [])
-    except Exception as e:
-        st.error(f"雲端讀取失敗：{e}")
+# ==================== 本地資料庫讀寫引擎 (100%不遺失) ====================
+def load_local_data():
+    """從本地 JSON 檔案載入波幣與歷史紀錄"""
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("bo_coins", 0.0), data.get("history", [])
+        except Exception as e:
+            st.error(f"本地檔案讀取失敗：{e}")
     return 0.0, []
 
-def save_cloud_data(bo_coins, history):
-    """將波幣與歷史紀錄同步至雲端"""
+def save_local_data(bo_coins, history):
+    """將波幣與歷史紀錄寫入本地 JSON 檔案"""
     try:
         payload = {
             "bo_coins": round_half_up(bo_coins),
             "history": history
         }
-        headers = {"Content-Type": "application/json"}
-        requests.put(JSONBIN_URL, json=payload, headers=headers, timeout=5)
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        st.error(f"雲端寫入失敗：{e}")
+        st.error(f"本地檔案存檔失敗：{e}")
 
-def sync_from_cloud():
-    """強制手動從雲端同步"""
-    cloud_coins, cloud_history = load_cloud_data()
-    st.session_state.bo_coins = cloud_coins
-    st.session_state.history = cloud_history
+def sync_from_storage():
+    """強制手動從本地檔案同步」"""
+    saved_coins, saved_history = load_local_data()
+    st.session_state.bo_coins = saved_coins
+    st.session_state.history = saved_history
     st.session_state.data_loaded = True
 
 def get_random_coin_amount():
@@ -82,9 +79,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 啟動時自動從雲端同步資料
+# 每次運行都優先檢查並載入本地保存資料
 if "data_loaded" not in st.session_state:
-    sync_from_cloud()
+    sync_from_storage()
 
 if "timer_running" not in st.session_state:
     st.session_state.timer_running = False
@@ -120,7 +117,7 @@ def check_lottery():
         
         won = get_random_coin_amount()
         st.session_state.bo_coins += won
-        save_cloud_data(st.session_state.bo_coins, st.session_state.history)
+        save_local_data(st.session_state.bo_coins, st.session_state.history)
         st.toast(f"🎉 計時獎勵發放！獲得 +{won:.2f} 波幣！", icon="🪙")
 
 check_lottery()
@@ -173,10 +170,10 @@ function toggleFullScreen() {
 # ==================== 頁面導航 ====================
 st.title("🐾 波貓計時與收銀系統")
 
-# 全域手動同步雲端按鈕
-if st.button("🔄 重新載入雲端最新資料", use_container_width=True):
-    sync_from_cloud()
-    st.success("已重新對接雲端資料庫！")
+# 手動讀取硬碟歷史備份按鈕
+if st.button("🔄 重新載入硬碟儲存資料", use_container_width=True):
+    sync_from_storage()
+    st.success("已重新對接本地檔案儲存區！")
     st.rerun()
 
 tab1, tab2, tab3 = st.tabs(["⏱️ 計時器模式", "✎ 算式與紀錄", "💵 收銀結帳"])
@@ -235,8 +232,8 @@ with tab1:
                     "note": "計時器存檔" + (" (雙倍)" if st.session_state.is_double else "")
                 }
                 st.session_state.history.append(record)
-                save_cloud_data(st.session_state.bo_coins, st.session_state.history)
-                st.success(f"已成功存檔並同步至雲端：{minutes_used:.2f} 分鐘 / {cost:.2f} 元！")
+                save_local_data(st.session_state.bo_coins, st.session_state.history)
+                st.success(f"已成功存檔並寫入檔案：{minutes_used:.2f} 分鐘 / {cost:.2f} 元！")
             else:
                 st.warning("時間為 0，無需存檔！")
 
@@ -261,14 +258,14 @@ with tab2:
                 try:
                     amt = float(inp.split()[1])
                     st.session_state.bo_coins += amt
-                    save_cloud_data(st.session_state.bo_coins, st.session_state.history)
-                    st.success(f"已手動增加 {amt} 波幣並同步至雲端！")
+                    save_local_data(st.session_state.bo_coins, st.session_state.history)
+                    st.success(f"已手動增加 {amt} 波幣並寫入檔案！")
                 except Exception:
                     st.error("語法錯誤，請輸入 addcoin 10")
             elif inp == "resetcoin":
                 st.session_state.bo_coins = 0.0
-                save_cloud_data(0.0, st.session_state.history)
-                st.success("波幣已歸零並同步至雲端！")
+                save_local_data(0.0, st.session_state.history)
+                st.success("波幣已歸零並更新檔案！")
             else:
                 try:
                     val = float(eval(inp))
@@ -297,8 +294,8 @@ with tab2:
                 dt_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 rec = {"time": dt_now, "minutes": round_half_up(m_mins), "cost": round_half_up(m_cost), "note": "手動紀錄"}
                 st.session_state.history.append(rec)
-                save_cloud_data(st.session_state.bo_coins, st.session_state.history)
-                st.success("手動紀錄已新增並同步至雲端！")
+                save_local_data(st.session_state.bo_coins, st.session_state.history)
+                st.success("手動紀錄已新增並寫入檔案！")
                 st.rerun()
 
     st.markdown("---")
@@ -323,8 +320,8 @@ with tab2:
             st.info(f"🪙 **自動偵測結果：波幣備份檔**！找到數值 **{coin_val}** 波幣")
             if st.button("🪙 匯入並更新波幣餘額", type="primary"):
                 st.session_state.bo_coins = coin_val
-                save_cloud_data(st.session_state.bo_coins, st.session_state.history)
-                st.success(f"已成功將波幣餘額更新為：{coin_val} 並同步至雲端！")
+                save_local_data(st.session_state.bo_coins, st.session_state.history)
+                st.success(f"已成功將波幣餘額更新為：{coin_val} 並寫入檔案！")
                 st.rerun()
         
         elif file_name.endswith(".csv"):
@@ -351,8 +348,8 @@ with tab2:
                 st.info(f"📊 **自動偵測結果：CSV 歷史紀錄檔**！共找到 {len(new_records)} 筆紀錄")
                 if st.button("📥 確認匯入此 CSV 紀錄", type="primary"):
                     st.session_state.history.extend(new_records)
-                    save_cloud_data(st.session_state.bo_coins, st.session_state.history)
-                    st.success(f"成功匯入 {len(new_records)} 筆紀錄並同步至雲端！")
+                    save_local_data(st.session_state.bo_coins, st.session_state.history)
+                    st.success(f"成功匯入 {len(new_records)} 筆紀錄並寫入檔案！")
                     st.rerun()
             except Exception:
                 st.error("CSV 格式解析失敗！")
@@ -369,7 +366,6 @@ with tab2:
                 cost_v = 0.0
                 note_v = "歷史備份"
 
-                # 1. 嘗試比對標準計時器格式
                 mins_match = re.search(r'([\d.]+)\s*分鐘', line)
                 cost_match = re.search(r'(?:等於|金額:|->)\s*([\d.]+)\s*元', line)
 
@@ -384,7 +380,6 @@ with tab2:
                     else:
                         note_v = "計時器存檔"
                 else:
-                    # 2. 比對手動格式
                     manual_match = re.search(r'\[手動\]\s*([\d.]+)', line)
                     if manual_match:
                         raw_num = manual_match.group(1)
@@ -405,8 +400,8 @@ with tab2:
                 st.dataframe(pd.DataFrame(parsed_records)[["time", "minutes", "cost", "note"]])
                 if st.button("📥 確認匯入這些歷史紀錄", type="primary", use_container_width=True):
                     st.session_state.history.extend(parsed_records)
-                    save_cloud_data(st.session_state.bo_coins, st.session_state.history)
-                    st.success("歷史紀錄已順利匯入完成並同步至雲端！")
+                    save_local_data(st.session_state.bo_coins, st.session_state.history)
+                    st.success("歷史紀錄已順利匯入完成並寫入檔案！")
                     st.rerun()
             else:
                 st.warning("⚠️ 無法識別此檔案內容，請確認是否為正確的備份檔。")
@@ -433,7 +428,6 @@ with tab2:
     df_combined = pd.concat([df_export, summary_data], ignore_index=True) if not df_export.empty else summary_data
     csv_data = df_combined.to_csv(index=False, encoding='utf-8-sig')
 
-    # 生成帶有 UTF-8 BOM 的 TXT (防止手機與Windows開啟亂碼)
     txt_str = f"=========================================\n"
     txt_str += f"   🐾 波貓系統完整報表 ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n"
     txt_str += f"=========================================\n"
@@ -495,15 +489,15 @@ with tab2:
 
     if has_deleted:
         st.session_state.history = records_to_keep
-        save_cloud_data(st.session_state.bo_coins, st.session_state.history)
-        st.success("已成功刪除該筆紀錄並更新雲端！")
+        save_local_data(st.session_state.bo_coins, st.session_state.history)
+        st.success("已成功刪除該筆紀錄並更新檔案！")
         st.rerun()
 
     if st.button("🗑️ 清空所有歷史紀錄", type="secondary"):
         if del_pwd == SECURITY_PASSWORD:
             st.session_state.history = []
-            save_cloud_data(st.session_state.bo_coins, [])
-            st.success("紀錄已清空並更新雲端！")
+            save_local_data(st.session_state.bo_coins, [])
+            st.success("紀錄已清空並更新檔案！")
             st.rerun()
         else:
             st.error("🔒 密碼錯誤，無法清空紀錄！")
@@ -548,8 +542,8 @@ with tab3:
             st.session_state.bo_coins -= use_coins
             st.session_state.history = []
             
-            # 同步更新雲端
-            save_cloud_data(st.session_state.bo_coins, [])
+            # 同步更新本地檔案
+            save_local_data(st.session_state.bo_coins, [])
             
-            st.success("🎉 結帳完畢！波幣已扣除，歷史紀錄已自動歸零並同步至雲端！")
+            st.success("🎉 結帳完畢！波幣已扣除，歷史紀錄已自動歸零並同步寫入檔案！")
             st.rerun()
