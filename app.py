@@ -359,7 +359,7 @@ with tab2:
                 cost_v = 0.0
                 note_v = "歷史備份"
 
-                # 1. 嘗試比對標準計時器格式： 11.89 分鐘 -> 1.19 元
+                # 1. 嘗試比對標準計時器格式
                 mins_match = re.search(r'([\d.]+)\s*分鐘', line)
                 cost_match = re.search(r'(?:等於|金額:|->)\s*([\d.]+)\s*元', line)
 
@@ -374,7 +374,7 @@ with tab2:
                     else:
                         note_v = "計時器存檔"
                 else:
-                    # 2. 比對手動格式： [手動] 71.18 或 [手動] 5.02.79
+                    # 2. 比對手動格式
                     manual_match = re.search(r'\[手動\]\s*([\d.]+)', line)
                     if manual_match:
                         raw_num = manual_match.group(1)
@@ -423,20 +423,24 @@ with tab2:
     df_combined = pd.concat([df_export, summary_data], ignore_index=True) if not df_export.empty else summary_data
     csv_data = df_combined.to_csv(index=False, encoding='utf-8-sig')
 
-    txt_content = f"=========================================\n"
-    txt_content += f"   🐾 波貓系統完整報表 ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n"
-    txt_content += f"=========================================\n"
-    txt_content += f"🪙 目前波幣資產：{st.session_state.bo_coins:.2f} 波幣\n"
-    txt_content += f"⏱️ 歷史累計總時間：{total_mins:.2f} 分鐘\n"
-    txt_content += f"💰 歷史累計總金額：{total_cost:.2f} 元\n"
-    txt_content += f"-----------------------------------------\n"
+    # 生成帶有 UTF-8 BOM 的 TXT (防止手機與Windows開啟亂碼)
+    txt_str = f"=========================================\n"
+    txt_str += f"   🐾 波貓系統完整報表 ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n"
+    txt_str += f"=========================================\n"
+    txt_str += f"🪙 目前波幣資產：{st.session_state.bo_coins:.2f} 波幣\n"
+    txt_str += f"⏱️ 歷史累計總時間：{total_mins:.2f} 分鐘\n"
+    txt_str += f"💰 歷史累計總金額：{total_cost:.2f} 元\n"
+    txt_str += f"-----------------------------------------\n"
     
     if st.session_state.history:
         for item in st.session_state.history:
-            txt_content += f"[{item['time']}] {item['minutes']}分鐘 | {item['cost']}元 | {item.get('note', '')}\n"
+            txt_str += f"[{item['time']}] {item['minutes']}分鐘 | {item['cost']}元 | {item.get('note', '')}\n"
     else:
-        txt_content += " (無歷史消費紀錄)\n"
-    txt_content += f"=========================================\n"
+        txt_str += " (無歷史消費紀錄)\n"
+    txt_str += f"=========================================\n"
+
+    # 強制轉為帶 BOM 的 bytes (utf-8-sig)
+    txt_bytes = txt_str.encode("utf-8-sig")
 
     dl_col1, dl_col2 = st.columns(2)
     with dl_col1:
@@ -450,9 +454,9 @@ with tab2:
     with dl_col2:
         st.download_button(
             label="📄 下載完整報表 (TXT 檔)",
-            data=txt_content,
+            data=txt_bytes,
             file_name=f"波貓完整報表_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            mime="text/plain",
+            mime="text/plain; charset=utf-8",
             use_container_width=True
         )
 
