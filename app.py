@@ -34,7 +34,7 @@ def safe_float(val_str):
     except Exception:
         return 0.0
 
-# ==================== 本地資料庫讀寫引擎 (100%不遺失) ====================
+# ==================== 本地資料庫讀寫引擎 ====================
 def load_local_data():
     """從本地 JSON 檔案載入波幣與歷史紀錄"""
     if os.path.exists(DATA_FILE):
@@ -59,7 +59,7 @@ def save_local_data(bo_coins, history):
         st.error(f"本地檔案存檔失敗：{e}")
 
 def sync_from_storage():
-    """強制手動從本地檔案同步」"""
+    """強制手動從本地檔案同步"""
     saved_coins, saved_history = load_local_data()
     st.session_state.bo_coins = saved_coins
     st.session_state.history = saved_history
@@ -170,7 +170,6 @@ function toggleFullScreen() {
 # ==================== 頁面導航 ====================
 st.title("🐾 波貓計時與收銀系統")
 
-# 手動讀取硬碟歷史備份按鈕
 if st.button("🔄 重新載入硬碟儲存資料", use_container_width=True):
     sync_from_storage()
     st.success("已重新對接本地檔案儲存區！")
@@ -299,7 +298,6 @@ with tab2:
                 st.rerun()
 
     st.markdown("---")
-    # ==================== 超強防錯 TXT/CSV 解析引擎 ====================
     st.write("##### 📂 上傳/匯入歷史備份檔 (全自動辨識)")
     uploaded_file = st.file_uploader("選擇上傳手機裡的舊備份檔案 (TXT 或 CSV):", type=["txt", "csv"])
     
@@ -513,9 +511,17 @@ with tab3:
 
     pay_col1, pay_col2 = st.columns(2)
     with pay_col1:
-        paid_amount = st.number_input("輸入顧客實付金額 (元):", min_value=0.0, step=10.0)
+        paid_amount = st.number_input("輸入顧客實付金額 (元):", min_value=0.0, step=10.0, format="%.2f")
     with pay_col2:
-        use_coins = st.number_input("輸入折抵波幣 (1幣 = 1分):", min_value=0.0, max_value=float(st.session_state.bo_coins), step=1.0)
+        # 🔥 關鍵修復：step 改為 0.01 並加入 format="%.2f"，允許選擇並精確輸入帶小數點的波幣（例如 11.34）
+        max_coins_available = float(st.session_state.bo_coins)
+        use_coins = st.number_input(
+            "輸入折抵波幣 (1幣 = 1分):", 
+            min_value=0.0, 
+            max_value=max_coins_available, 
+            step=0.01, 
+            format="%.2f"
+        )
 
     coin_discount_cost = round_half_up(use_coins * 0.1)
     final_need = max(0.0, total_checkout_cost - coin_discount_cost)
@@ -539,7 +545,7 @@ with tab3:
         elif use_coins > st.session_state.bo_coins:
             st.error("波幣不足，無法完成結帳！")
         else:
-            st.session_state.bo_coins -= use_coins
+            st.session_state.bo_coins = round_half_up(st.session_state.bo_coins - use_coins)
             st.session_state.history = []
             
             # 同步更新本地檔案
